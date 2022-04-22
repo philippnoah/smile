@@ -13,11 +13,12 @@ import utils
 class ConvNet(nn.Module):
     def __init__(self, config):
         super(ConvNet, self).__init__()
+        x_dim, y_dim = config.dims[:2]
         self.conv1 = nn.Sequential(
             nn.Conv2d(2 * config.repeat * config.channels, 64, 5, 2, 2),
             nn.ReLU()
         )
-        dim_x, dim_y = utils.next_conv_size(dim_x, dim_y, 5, 2, 2)
+        dim_x, dim_y = utils.next_conv_size(x_dim, y_dim, 5, 2, 2)
 
         self.conv2 = nn.Sequential(
             nn.Conv2d(64, 128, 5, 2, 2),
@@ -140,11 +141,10 @@ class VAEConcatCritic(nn.Module):
         fq = fq1.view(-1, 1) + fq2.view(1, -1)
         return fp, fq
 
-def generate_mask(config):
+def generate_mask(mask, config):
     batch_size = config.batch_size
     channels = config.channels
     x_dim, y_dim = config.dims[:2]
-    mask = config.mask
     return torch.cat([
         torch.ones(batch_size, channels, x_dim - mask, x_dim),
         torch.zeros(batch_size, channels, mask, x_dim)
@@ -185,27 +185,25 @@ def generate_transform(config):
 
     return f
 
-def generate_test(X, imgs, masks, dim, transform):
-    batch_size, channels = X[0].size(0), X[0].size(1)
-    x = [X[i].to(config.device) for i in imgs[0]]
-    y = [X[i].to(config.device) for i in imgs[1]]
+def generate_test(X, config):
+    x = [X[i].to(config.device) for i in config.imgs[0]]
+    y = [X[i].to(config.device) for i in config.imgs[1]]
 
-    if transform == 'mask':
-        mx = [generate_mask(batch_size, channels, m, dim) for m in masks[0]]
-        my = [generate_mask(batch_size, channels, m, dim) for m in masks[1]]
+    if config.transform == 'mask':
+        mx = [generate_mask(m, config) for m in config.masks[0]]
+        my = [generate_mask(m, config) for m in config.masks[1]]
 
         x = torch.cat(x, dim=1) * torch.cat(mx, dim=1)
         y = torch.cat(y, dim=1) * torch.cat(my, dim=1)
     else:
         x = torch.cat(x, dim=1)
-        mask = masks[0]
-        t = generate_transform(batch_size, channels, mask, dim, transform)
+        t = generate_transform(config)
         my = [t(b) for b in y]
         y = torch.cat(my, dim=1)
 
     return x, y
 
-def MI(f, config, **kwargs):
+def MI(f, config):
     if config.estimator_name == 'infonce':
         loss = -utils.infonce_lower_bound(f)
     elif config.estimator_name == 'dv':
@@ -213,9 +211,9 @@ def MI(f, config, **kwargs):
     elif config.estimator_name == 'nwj':
         loss = -utils.nwj_lower_bound(f)
     elif config.estimator_name == 'reg_dv':
-        loss = -utils.regularized_dv_bound(f, **kwargs)
+        loss = -utils.regularized_dv_bound(f, l=config.l)
     elif config.estimator_name == 'smile':
-        loss = -utils.smile_lower_bound(f, **kwargs)
+        loss = -utils.smile_lower_bound(f, alpha=config.alpha, clip=config.clip)
     elif config.estimator_name == 'mine':
         loss, config.buffer = utils.mine_lower_bound(f, buffer=config.buffer, momentum=0.9)
         loss = -loss
@@ -228,10 +226,14 @@ def load_dataset(config):
     transf = transforms.ToTensor()
     if config.dataset_name == 'mnist':
         dataset = datasets.MNIST('data/', train=True, download=True, transform=transforms.Compose([transf]))
+        config.channels = 1
+        config.dims = (28, 28)
     else:
         normal = transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
         dataset = datasets.CIFAR10('data/cifar/', train=True, download=True, \
             transform=transforms.Compose([transf, normal]))
+        config.channels = 3
+        config.dims = (32, 32)
 
     random_indices = np.random.permutation(np.arange(0, int(len(dataset) * config.dataset_ratio)))
 
@@ -249,10 +251,12 @@ def test(test_dataloader, net, config, **kwargs):
     with torch.no_grad():
         test_losses = []
         for j, x in enumerate(test_dataloader):
+            if j > config.iterations:
+                break
             x = torch.chunk(x[0], config.repeat, dim=0)
             x, y = generate_test(x, config)
             f = net(x, y).to(config.device)
-            loss = MI(f, buffer=config.buffer, **kwargs)
+            loss = MI(f, config)
 
             if j % 20 == 0 and config.debug:
                 print(f'{j}: {-loss.item():.3f}')
@@ -271,6 +275,7 @@ def init_estimator(config):
         net = VAEConcatCritic([pnet, qnet1, qnet2])
         net.to(config.device)
     else:
+        config.channels = 1
         conv_net = ConvNet(config)
         net = ConcatCritic(conv_net)
         net.to(config.device)
@@ -282,14 +287,13 @@ def train(train_dataloader, net, config, **kwargs):
     losses = []
     for i in range(config.epochs):
         for j, x in enumerate(train_dataloader):
+            if j > config.iterations:
+                break
             optimizer.zero_grad()
-            bs = x[0].size(0)
-            if bs != config.batch_size * config.repeat:
-                pass
             x = torch.chunk(x[0], config.repeat, dim=0)
             x, y = generate_test(x, config)
             f = net(x, y).to(config.device)
-            loss = MI(f, **kwargs)
+            loss = MI(f, config)
             loss.backward()
 
             if j % 20 == 0 and config.debug:
@@ -301,26 +305,21 @@ def train(train_dataloader, net, config, **kwargs):
             mi = -loss.item()
             losses.append(mi)
 
-def image_mi_estimator(config, **kwargs):
-    train_dataloader, test_dataloader = load_dataset(config)
-    net = init_estimator(config)
-    train_losses = train(train_dataloader, net, config, **kwargs)
-    test_losses = test(test_dataloader, net, config, **kwargs)
-    return np.array(losses), np.array(test_losses)
-
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--estimator-name', type=str, default='smile')
     parser.add_argument('--imgs', type=str, default=None)
     parser.add_argument('--masks', type=str, default=None)
     parser.add_argument('--exp', type=str, default='')
-    parser.add_argument('--batch-size', type=int, default=32)
+    parser.add_argument('--batch-size', type=int, default=8)
     parser.add_argument('--test', action='store_true')
     parser.add_argument('--dataset-name', type=str, default='mnist')
     parser.add_argument('--transform', type=str, default='mask')
     parser.add_argument('--dataset-ratio', type=float, default=1.0)
-    parser.add_argument('--debug', type=bool, default=False)
-    parser.add_argument('--epochs', type=int, default=2)
+    parser.add_argument('--debug', type=bool, default=True)
+    parser.add_argument('--epochs', type=int, default=1)
+    parser.add_argument('--alpha', type=float, default=1.0)
+    parser.add_argument('--iterations', type=float, default=20)#float("inf"))
     args = parser.parse_args()
     return args
 
@@ -347,21 +346,24 @@ def init(config):
         config.clip = float(config.estimator.split('_')[-1])
 
     config.buffer = None
-
     config.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-def save_losses(config):
-    logdir_t = f'logs/{config.dataset}/{config.exp}_t'
-    logdir = f'logs/{config.dataset}/{config.exp}'
+def save_losses(losses, test_losses, config):
+    logdir_t = f'logs/{config.dataset_name}/{config.exp}_t'
+    logdir = f'logs/{config.dataset_name}/{config.exp}'
     os.makedirs(logdir, exist_ok=True)
     os.makedirs(logdir_t, exist_ok=True)
-    savedir = os.path.join(logdir, f'{config.critic}_{config.imgs}_{config.masks}')
+    savedir = os.path.join(logdir, f'{config.estimator_name}_{config.imgs}_{config.masks}')
     np.save(savedir, losses)
-    savedir = os.path.join(logdir_t, f'{config.critic}_{config.imgs}_{config.masks}')
+    savedir = os.path.join(logdir_t, f'{config.estimator_name}_{config.imgs}_{config.masks}')
     np.save(savedir, test_losses)
 
 if __name__ == '__main__':
     config = parse_args()
     init(config)
-    losses, test_losses = image_mi_estimator(config)
-    save_losses()
+    train_dataloader, test_dataloader = load_dataset(config)
+    net = init_estimator(config)
+    train_losses = train(train_dataloader, net, config)
+    test_losses = test(test_dataloader, net, config)
+    train_losses, test_losses = np.array(train_losses), np.array(test_losses)
+    save_losses(train_losses, test_losses, config)
