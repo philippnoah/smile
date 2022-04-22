@@ -15,6 +15,7 @@ def sample_correlated_gaussian(rho=0.5, dim=20, batch_size=128, cubic=None):
 
     return x, y
 
+
 def next_conv_size(dim_x, dim_y, k, s, p):
     '''Infers the next size of a convolutional layer.
     Args:
@@ -56,6 +57,7 @@ def next_conv_size(dim_x, dim_y, k, s, p):
         px, py = p
     return (infer_conv_size(dim_x, kx, sx, px),
             infer_conv_size(dim_y, ky, sy, py))
+
 
 def rho_to_mi(dim, rho):
     return -0.5 * np.log(1-rho**2) * dim
