@@ -1,5 +1,5 @@
-import numpy as np
 import argparse
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -8,7 +8,9 @@ import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 import torch.distributions as dist
 import os
+import matplotlib.pyplot as plt
 import utils
+from datetime import datetime as dt
 
 class ConvNet(nn.Module):
     def __init__(self, config):
@@ -248,8 +250,8 @@ def load_dataset(config):
     return train_dataloader, test_dataloader
 
 def test(test_dataloader, net, config, **kwargs):
+    test_losses = []
     with torch.no_grad():
-        test_losses = []
         for j, x in enumerate(test_dataloader):
             if j > config.iterations:
                 break
@@ -265,7 +267,7 @@ def test(test_dataloader, net, config, **kwargs):
 
             mi = -loss.item()
             test_losses.append(mi)
-    return test_losses
+    return np.array(test_losses)
 
 def init_estimator(config):
     if config.estimator_name == 'vae':
@@ -283,8 +285,7 @@ def init_estimator(config):
 
 def train(train_dataloader, net, config, **kwargs):
     optimizer = optim.Adam(net.parameters(), lr=1e-4)
-
-    losses = []
+    train_losses = []
     for i in range(config.epochs):
         for j, x in enumerate(train_dataloader):
             if j > config.iterations:
@@ -303,7 +304,8 @@ def train(train_dataloader, net, config, **kwargs):
 
             optimizer.step()
             mi = -loss.item()
-            losses.append(mi)
+            train_losses.append(mi)
+    return np.array(train_losses)
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -320,10 +322,13 @@ def parse_args():
     parser.add_argument('--epochs', type=int, default=1)
     parser.add_argument('--alpha', type=float, default=1.0)
     parser.add_argument('--iterations', type=float, default=20)#float("inf"))
+    parser.add_argument('--fig-dir', type=str, default='figs/')
     args = parser.parse_args()
     return args
 
-def init(config):
+def init_config():
+    config = parse_args()
+
     if config.imgs:
         config.imgs = eval(config.imgs)
 
@@ -348,22 +353,58 @@ def init(config):
     config.buffer = None
     config.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+    config.log_dir_t = f'logs/{config.dataset_name}/{config.exp}_t'
+    config.log_dir = f'logs/{config.dataset_name}/{config.exp}'
+
+    os.makedirs(config.log_dir, exist_ok=True)
+    os.makedirs(config.log_dir_t, exist_ok=True)
+    
+    config.filename = (
+        f"{config.estimator_name}_"
+        f"{str(config.imgs).replace(' ', '')}_"
+        f"{str(config.masks).replace(' ', '')}"
+        )
+
+    if config.debug:
+        config.filename = f"{config.estimator_name}_{dt.now().strftime('%Y-%m-%d-_%H:%M:%S')}"
+
+    config.loss_log_path = os.path.join(config.log_dir, config.filename)
+    config.loss_log_path_t = os.path.join(config.log_dir_t, config.filename)
+
+    os.makedirs(config.fig_dir, exist_ok=True)
+    config.fig_file_path = os.path.join(config.fig_dir, config.filename)
+
+    if config.debug:
+        print(config)
+
+    return config
+
+def plot(losses, config, label):
+    plt.plot(losses, label=label)
+    plt.title(config)
+    plt.legend()
+    plt.xlabel('iterations')
+    plt.ylabel('MI')
+    path = f"{config.fig_file_path}_{label}"
+    plt.savefig(path)
+    plt.clf()
+
 def save_losses(losses, test_losses, config):
-    logdir_t = f'logs/{config.dataset_name}/{config.exp}_t'
-    logdir = f'logs/{config.dataset_name}/{config.exp}'
-    os.makedirs(logdir, exist_ok=True)
-    os.makedirs(logdir_t, exist_ok=True)
-    savedir = os.path.join(logdir, f'{config.estimator_name}_{config.imgs}_{config.masks}')
-    np.save(savedir, losses)
-    savedir = os.path.join(logdir_t, f'{config.estimator_name}_{config.imgs}_{config.masks}')
-    np.save(savedir, test_losses)
+    np.save(config.loss_log_path, losses)
+    np.save(config.loss_log_path_t, test_losses)
+
+    plot(train_losses, config, label='train')
+    plot(test_losses, config, label='test')
 
 if __name__ == '__main__':
-    config = parse_args()
-    init(config)
+    # initialize
+    config = init_config()
     train_dataloader, test_dataloader = load_dataset(config)
     net = init_estimator(config)
+
+    # train, test
     train_losses = train(train_dataloader, net, config)
     test_losses = test(test_dataloader, net, config)
-    train_losses, test_losses = np.array(train_losses), np.array(test_losses)
+
+    # save results
     save_losses(train_losses, test_losses, config)
