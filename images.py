@@ -1,5 +1,5 @@
 import numpy as np
-
+import argparse
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -428,35 +428,33 @@ def image_mi_estimator(dataset_name='mnist', dataset_ratio=1.0, critic_type='smi
     return np.array(losses), np.array(test_losses)
 
 
-def cmdline():
-    import argparse
+def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--critic', type=str, default='smile')
-    parser.add_argument('--imgs', type=str, default='')
-    parser.add_argument('--masks', type=str, default='')
+    parser.add_argument('--imgs', type=str, default=None)
+    parser.add_argument('--masks', type=str, default=None)
     parser.add_argument('--exp', type=str, default='')
     parser.add_argument('--test', action='store_true')
     parser.add_argument('--dataset', type=str, default='mnist')
     parser.add_argument('--transform', type=str, default='mask')
-
     args = parser.parse_args()
+    return args
 
-    if len(args.imgs) == 0:
-        args.imgs = None
-    else:
+if __name__ == '__main__':
+    args = parse_args()
+
+    if args.imgs:
         args.imgs = eval(args.imgs)
-    if len(args.masks) == 0:
-        args.masks = None
-    else:
+
+    if args.masks:
         args.masks = eval(args.masks)
 
     k = args.critic
     critic_type = k.split('_')[0]
 
-    if len(k.split('_')) > 1:
+    clip = None
+    if '_' in k:
         clip = float(k.split('_')[-1])
-    else:
-        clip = None
 
     losses, test_losses = image_mi_estimator(dataset_name=args.dataset, critic_type=critic_type, clip=clip,
                                              imgs=args.imgs, masks=args.masks, debug=True, test=args.test, transform=args.transform)
@@ -472,11 +470,3 @@ def cmdline():
     np.save(savedir, losses)
     savedir = os.path.join(logdir_t, f'{args.critic}_{args.imgs}_{args.masks}')
     np.save(savedir, test_losses)
-
-
-if __name__ == '__main__':
-    cmdline()
-    # image_mi_estimator(dataset_ratio=1.0, critic_type='smile',
-    #                    imgs=([0, 1], [0, 1]), masks=([0, 0], [24, 24]), debug=True)
-    # image_mi_estimator(dataset_ratio=1.0, critic_type='smile', mask=28, repeat=2, switch=True)
-    # image_mi_estimator(dataset_ratio=1.0, critic_type='smile', repeat=2, masks=(20, 23))
