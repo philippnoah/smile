@@ -15,6 +15,47 @@ def sample_correlated_gaussian(rho=0.5, dim=20, batch_size=128, cubic=None):
 
     return x, y
 
+def next_conv_size(dim_x, dim_y, k, s, p):
+    '''Infers the next size of a convolutional layer.
+    Args:
+        dim_x: First dimension.
+        dim_y: Second dimension.
+        k: Kernel size.
+        s: Stride.
+        p: Padding.
+    Returns:
+        (int, int): (First output dimension, Second output dimension)
+    '''
+
+    def infer_conv_size(w, k, s, p):
+        '''Infers the next size after convolution.
+        Args:
+            w: Input size.
+            k: Kernel size.
+            s: Stride.
+            p: Padding.
+        Returns:
+            int: Output size.
+        '''
+        x = (w - k + 2 * p) // s + 1
+        return x
+
+    if isinstance(k, int):
+        kx, ky = (k, k)
+    else:
+        kx, ky = k
+
+    if isinstance(s, int):
+        sx, sy = (s, s)
+    else:
+        sx, sy = s
+
+    if isinstance(p, int):
+        px, py = (p, p)
+    else:
+        px, py = p
+    return (infer_conv_size(dim_x, kx, sx, px),
+            infer_conv_size(dim_y, ky, sy, py))
 
 def rho_to_mi(dim, rho):
     return -0.5 * np.log(1-rho**2) * dim
