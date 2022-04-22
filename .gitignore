@@ -129,10 +129,9 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-# data
-data/
-
 # custom
+data/
+logs/
 .history/
 *.png 
 *.jpg
