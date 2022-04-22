@@ -10,8 +10,6 @@ import torch.distributions as dist
 import os
 import utils
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
 class ConvNet(nn.Module):
     def __init__(self, config):
         super(ConvNet, self).__init__()
@@ -150,7 +148,7 @@ def generate_mask(config):
     return torch.cat([
         torch.ones(batch_size, channels, x_dim - mask, x_dim),
         torch.zeros(batch_size, channels, mask, x_dim)
-    ], dim=2).to(device)
+    ], dim=2).to(config.device)
 
 def generate_transform(config):
     x_dim = config.dims[0]
@@ -182,15 +180,15 @@ def generate_transform(config):
         for i in range(batch_img.size(0)):
             processed_img.append(
                 t(batch_img[i].cpu()).view(1, channels, x_dim, x_dim))
-        o = torch.cat(processed_img, dim=0).to(device)
+        o = torch.cat(processed_img, dim=0).to(config.device)
         return o
 
     return f
 
 def generate_test(X, imgs, masks, dim, transform):
     batch_size, channels = X[0].size(0), X[0].size(1)
-    x = [X[i].to(device) for i in imgs[0]]
-    y = [X[i].to(device) for i in imgs[1]]
+    x = [X[i].to(config.device) for i in imgs[0]]
+    y = [X[i].to(config.device) for i in imgs[1]]
 
     if transform == 'mask':
         mx = [generate_mask(batch_size, channels, m, dim) for m in masks[0]]
@@ -253,7 +251,7 @@ def test(test_dataloader, net, config, **kwargs):
         for j, x in enumerate(test_dataloader):
             x = torch.chunk(x[0], config.repeat, dim=0)
             x, y = generate_test(x, config)
-            f = net(x, y).to(device)
+            f = net(x, y).to(config.device)
             loss = MI(f, buffer=config.buffer, **kwargs)
 
             if j % 20 == 0 and config.debug:
@@ -271,11 +269,11 @@ def init_estimator(config):
         qnet1 = VAE(config)
         qnet2 = VAE(config)
         net = VAEConcatCritic([pnet, qnet1, qnet2])
-        net.to(device)
+        net.to(config.device)
     else:
         conv_net = ConvNet(config)
         net = ConcatCritic(conv_net)
-        net.to(device)
+        net.to(config.device)
     return net
 
 def train(train_dataloader, net, config, **kwargs):
@@ -290,7 +288,7 @@ def train(train_dataloader, net, config, **kwargs):
                 pass
             x = torch.chunk(x[0], config.repeat, dim=0)
             x, y = generate_test(x, config)
-            f = net(x, y).to(device)
+            f = net(x, y).to(config.device)
             loss = MI(f, **kwargs)
             loss.backward()
 
@@ -349,6 +347,8 @@ def init(config):
         config.clip = float(config.estimator.split('_')[-1])
 
     config.buffer = None
+
+    config.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def save_losses(config):
     logdir_t = f'logs/{config.dataset}/{config.exp}_t'
