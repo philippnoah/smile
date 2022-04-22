@@ -36,16 +36,16 @@ def logmeanexp_diag(x):
     logsumexp = torch.logsumexp(x.diag(), dim=(0,))
     num_elem = batch_size
 
-    return logsumexp - torch.log(torch.tensor(num_elem).float()).cuda()
+    return logsumexp - torch.log(torch.tensor(num_elem).float())
 
 
-def logmeanexp_nodiag(x, dim=None, device='cuda'):
+def logmeanexp_nodiag(x, dim=None, device='cpu'):
     batch_size = x.size(0)
     if dim is None:
         dim = (0, 1)
 
     logsumexp = torch.logsumexp(
-        x - torch.diag(np.inf * torch.ones(batch_size).to(device)), dim=dim)
+        x - torch.diag(np.inf * torch.ones(batch_size)), dim=dim)
 
     try:
         if len(dim) == 1:
@@ -54,7 +54,7 @@ def logmeanexp_nodiag(x, dim=None, device='cuda'):
             num_elem = batch_size * (batch_size - 1.)
     except:
         num_elem = batch_size - 1
-    return logsumexp - torch.log(torch.tensor(num_elem)).to(device)
+    return logsumexp - torch.log(torch.tensor(num_elem))
 
 
 def tuba_lower_bound(scores, log_baseline=None):
@@ -115,7 +115,7 @@ def dv_upper_lower_bound(f):
 
 def mine_lower_bound(f, buffer=None, momentum=0.9):
     if buffer is None:
-        buffer = torch.tensor(1.0).cuda()
+        buffer = torch.tensor(1.0)
     first_term = f.diag().mean()
 
     buffer_update = logmeanexp_nodiag(f).exp()
@@ -151,7 +151,7 @@ def renorm_q(f, alpha=1.0, clip=None):
 
 def disc_renorm_q(f):
     batch_size = f.size(0)
-    z = torch.zeros(1, requires_grad=True, device='cuda')
+    z = torch.zeros(1, requires_grad=True)
 
     opt = optim.SGD([z], lr=0.001)
     for i in range(10):
@@ -238,7 +238,7 @@ def estimate_p_norm(f, alpha=1.0):
 
 
 def estimate_mutual_information(estimator, x, y, critic_fn,
-                                baseline_fn=None, alpha_logit=None, **kwargs):
+                                baseline_fn=None, alpha_logit=None, device='cpu', **kwargs):
     """Estimate variational lower bounds on mutual information.
 
   Args:
@@ -255,7 +255,7 @@ def estimate_mutual_information(estimator, x, y, critic_fn,
   Returns:
     scalar estimate of mutual information
     """
-    x, y = x.cuda(), y.cuda()
+    x, y = x.to(device), y.to(device)
     scores = critic_fn(x, y)
     if baseline_fn is not None:
         # Some baselines' output is (batch_size, 1) which we remove here.
@@ -277,7 +277,7 @@ def estimate_mutual_information(estimator, x, y, critic_fn,
     elif estimator == 'dv':
         mi = dv_upper_lower_bound(scores)
     # p_norm = estimate_p_norm(scores * kwargs.get('alpha', 1.0))
-    if estimator is not 'smile':
+    if estimator != 'smile':
         p_norm = renorm_q(scores)
     else:
         p_norm = renorm_q(scores, alpha=kwargs.get(
@@ -342,7 +342,7 @@ CRITICS = {
 
 BASELINES = {
     'constant': lambda: None,
-    'unnormalized': lambda: mlp(dim=dim, hidden_dim=512, output_dim=1, layers=2, activation='relu').cuda(),
+    'unnormalized': lambda: mlp(dim=dim, hidden_dim=512, output_dim=1, layers=2, activation='relu').to(device),
     'gaussian': lambda: log_prob_gaussian,
 }
 
@@ -351,7 +351,7 @@ def train_estimator(critic_params, data_params, mi_params, opt_params, **kwargs)
     """Main training loop that estimates time-varying MI."""
     # Ground truth rho is only used by conditional critic
     critic = CRITICS[mi_params.get('critic', 'separable')](
-        rho=None, **critic_params).cuda()
+        rho=None, **critic_params).to(device)
     baseline = BASELINES[mi_params.get('baseline', 'constant')]()
 
     opt_crit = optim.Adam(critic.parameters(), lr=opt_params['learning_rate'])
@@ -370,7 +370,7 @@ def train_estimator(critic_params, data_params, mi_params, opt_params, **kwargs)
             opt_base.zero_grad()
 
         if mi_params['critic'] == 'conditional':
-            critic_ = CRITICS['conditional'](rho=rho).cuda()
+            critic_ = CRITICS['conditional'](rho=rho).to(device)
         else:
             critic_ = critic
 

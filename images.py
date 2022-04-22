@@ -10,6 +10,7 @@ import torch.distributions as dist
 
 import utils
 
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def next_conv_size(dim_x, dim_y, k, s, p):
     '''Infers the next size of a convolutional layer.
@@ -212,7 +213,7 @@ def generate_mask(batch_size, channels, mask, dim=28):
     return torch.cat([
         torch.ones(batch_size, channels, dim - mask, dim),
         torch.zeros(batch_size, channels, mask, dim)
-    ], dim=2).cuda()
+    ], dim=2).to(device)
 
 
 def generate_transform(batch_size, channels, mask, dim, transform):
@@ -247,7 +248,7 @@ def generate_transform(batch_size, channels, mask, dim, transform):
         for i in range(batch_img.size(0)):
             processed_img.append(
                 t(batch_img[i].cpu()).view(1, channels, dim, dim))
-        o = torch.cat(processed_img, dim=0).cuda()
+        o = torch.cat(processed_img, dim=0).to(device)
         return o
 
     return f
@@ -255,8 +256,8 @@ def generate_transform(batch_size, channels, mask, dim, transform):
 
 def generate_test(X, imgs, masks, dim, transform):
     batch_size, channels = X[0].size(0), X[0].size(1)
-    x = [X[i].cuda() for i in imgs[0]]
-    y = [X[i].cuda() for i in imgs[1]]
+    x = [X[i].to(device) for i in imgs[0]]
+    y = [X[i].to(device) for i in imgs[1]]
 
     if transform == 'mask':
         mx = [generate_mask(batch_size, channels, m, dim) for m in masks[0]]
@@ -273,20 +274,20 @@ def generate_test(X, imgs, masks, dim, transform):
         # ipdb.set_trace()
         y = torch.cat(my, dim=1)
 
-    x, y = x.cuda(), y.cuda()
+    x, y = x.to(device), y.to(device)
     return x, y
 
 
 def image_mi_estimator(dataset_name='mnist', dataset_ratio=1.0, critic_type='smile', imgs=None,
                        masks=None, debug=False, test=False, transform='mask', **kwargs):
     if dataset_name == 'mnist':
-        dataset = datasets.MNIST('/atlas/u/tsong/data/mnist', train=True,
+        dataset = datasets.MNIST('data/', train=True, download=True,
                                  transform=transforms.Compose([transforms.ToTensor()]))
         channels = 1
         dim_x = 28
         dim_y = 28
     else:
-        dataset = datasets.CIFAR10('/atlas/u/tsong/data/cifar', train=True,
+        dataset = datasets.CIFAR10('data/cifar/', train=True, download=True,
                                    transform=transforms.Compose([transforms.ToTensor(), transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])]))
         channels = 3
         dim_x = 32
@@ -309,14 +310,14 @@ def image_mi_estimator(dataset_name='mnist', dataset_ratio=1.0, critic_type='smi
     if critic_type != 'vae':
         net = ConcatCritic(
             ConvNet(repeat, channels=channels, dim_x=dim_x, dim_y=dim_y))
-        net.cuda()
+        net.to(device)
     else:
         pnet = VAE(repeat=repeat * 2, channels=channels,
                    dim_x=dim_x, dim_y=dim_y)
         qnet1 = VAE(repeat=repeat, channels=channels, dim_x=dim_x, dim_y=dim_y)
         qnet2 = VAE(repeat=repeat, channels=channels, dim_x=dim_x, dim_y=dim_y)
         net = VAEConcatCritic([pnet, qnet1, qnet2])
-        net.cuda()
+        net.to(device)
     optimizer = optim.Adam(net.parameters(), lr=1e-4)
 
     if critic_type != 'vae':
@@ -337,11 +338,8 @@ def image_mi_estimator(dataset_name='mnist', dataset_ratio=1.0, critic_type='smi
             # x = [v[0] for v in x]
             x, y = generate_test(
                 x, imgs, masks, dim=dim_x, transform=transform)
-            # x = (x >= 0.5).float()
-            # y = (y >= 0.5).float()
 
-            f = net(x, y)
-            # import ipdb; ipdb.set_trace()
+            f = net(x, y).to(device)
 
             if critic_type == 'infonce':
                 loss = -utils.infonce_lower_bound(f)
@@ -354,13 +352,13 @@ def image_mi_estimator(dataset_name='mnist', dataset_ratio=1.0, critic_type='smi
             elif critic_type == 'smile':
                 loss = -utils.smile_lower_bound(f, **kwargs)
             elif critic_type == 'mine':
-                loss, buffer = utils.mine_lower_bound(
-                    f, buffer=buffer, momentum=0.9)
-                # print(loss.item())
+                loss, buffer = utils.mine_lower_bound(f, buffer=buffer, momentum=0.9)
                 loss = -loss
             elif critic_type == 'vae':
                 loss = utils.vae_lower_bound(f)
                 loss = -loss
+
+                
             loss.backward()
 
             if debug and j % 20 == 0:
