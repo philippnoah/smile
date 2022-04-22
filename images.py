@@ -6,147 +6,17 @@ import torch.optim as optim
 import torch.utils.data as td
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
-import torch.distributions as dist
 import os
 import matplotlib.pyplot as plt
 import utils
 from datetime import datetime as dt
 
-class ConvNet(nn.Module):
-    def __init__(self, config):
-        super(ConvNet, self).__init__()
-        x_dim, y_dim = config.dims[:2]
-        self.conv1 = nn.Sequential(
-            nn.Conv2d(2 * config.repeat * config.channels, 64, 5, 2, 2),
-            nn.ReLU()
-        )
-        dim_x, dim_y = utils.next_conv_size(x_dim, y_dim, 5, 2, 2)
-
-        self.conv2 = nn.Sequential(
-            nn.Conv2d(64, 128, 5, 2, 2),
-            nn.ReLU()
-        )
-        dim_x, dim_y = utils.next_conv_size(dim_x, dim_y, 5, 2, 2)
-
-        self.fc = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(128 * dim_x * dim_y, 1024),
-            nn.ReLU(),
-            nn.Linear(1024, 1)
-        )
-
-    def forward(self, x):
-        z = self.conv1(x)
-        z = self.conv2(z)
-        z = self.fc(z)
-        return z
-
-class VAE(nn.Module):
-    def __init__(self, config, repeat=None):
-        super(VAE, self).__init__()
-        self.config = config
-        x_dim, y_dim, z_dim = config.dims
-        channels = config.channels
-        repeat = repeat or config.repeat
-
-        self.conv1 = nn.Sequential(
-            nn.Conv2d(repeat * channels, 64 * repeat, 5, 2, 2),
-            nn.ReLU()
-        )
-        dim_x, dim_y = utils.next_conv_size(x_dim, y_dim, 5, 2, 2)
-
-        self.conv2 = nn.Sequential(
-            nn.Conv2d(64 * repeat, 128 * repeat, 5, 2, 2),
-            nn.ReLU()
-        )
-        dim_x, dim_y = utils.next_conv_size(dim_x, dim_y, 5, 2, 2)
-        self.top_conv_x, self.top_conv_y = dim_x, dim_y
-        self.fc = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(128 * repeat * dim_x * dim_y, 1024 * repeat),
-            nn.ReLU(),
-            nn.Linear(1024 * repeat, z_dim * 2 * repeat)
-        )
-        self.enc = nn.Sequential(
-            self.conv1, self.conv2, self.fc
-        )
-
-        if self.dim_x == 28:
-            self.dec = nn.Sequential(
-                nn.Linear(z_dim * repeat, 400 * repeat),
-                nn.Softplus(),
-                nn.Linear(400 * repeat, 400 * repeat),
-                nn.Softplus(),
-                nn.Linear(400 * repeat, 784 * repeat)
-            )
-        else:
-            self.dec_fc = nn.Sequential(
-                nn.Linear(z_dim * repeat, 1024 * repeat),
-                nn.ReLU(),
-                nn.Linear(1024 * repeat, 128 * repeat * dim_x * dim_y),
-                nn.ReLU()
-            )
-            self.dec_deconv = nn.Sequential(
-                nn.ConvTranspose2d(128 * repeat, 64 * repeat, 5, 2, 2, 1),
-                nn.ReLU(),
-                nn.ConvTranspose2d(64 * repeat, repeat * channels, 5, 2, 2, 1)
-            )
-
-    def forward(self, x):
-        z = self.enc(x)
-        z_dims = self.z_dim * self.repeat
-        z_m, log_z_s = z[:, :z_dims], z[:, z_dims:]
-
-        kl = torch.sum(-log_z_s + (log_z_s.exp() **
-                                   2 + z_m ** 2) / 2.0 - 0.5, dim=1)
-        epsilon = torch.randn_like(z_m)
-        if self.dim_x == 28:
-            x_ = self.dec(z_m + epsilon * torch.exp(log_z_s)
-                          ).view(-1, self.repeat, 28, 28)
-            rec = torch.nn.BCEWithLogitsLoss(
-                reduction='none')(x_, x).sum(dim=(1, 2, 3))
-        else:
-            x_ = self.dec_fc(z_m + epsilon * torch.exp(log_z_s)
-                             ).view(-1, self.repeat * 128, self.top_conv_x, self.top_conv_y)
-            x_ = x_.view(-1, 128 * self.repeat,
-                         self.top_conv_x, self.top_conv_y)
-            x_ = self.dec_deconv(x_)
-            rec = torch.nn.BCEWithLogitsLoss(
-                reduction='none')(x_, x).sum(dim=(1, 2, 3))
-
-        return - rec - kl
-
-class ConcatCritic(nn.Module):
-    def __init__(self, net):
-        super(ConcatCritic, self).__init__()
-        self.net = net
-
-    def forward(self, x, y):
-        batch_size = x.size(0)
-        x_tiled = torch.stack([x] * batch_size, dim=0)
-        y_tiled = torch.stack([y] * batch_size, dim=1)
-        xy_pairs = torch.reshape(torch.cat((x_tiled, y_tiled), dim=2), [
-                                 batch_size * batch_size, x.size(1) * 2] + list(x.shape[2:]))
-        scores = self.net(xy_pairs)
-        return torch.reshape(scores, [batch_size, batch_size]).t()
-
-class VAEConcatCritic(nn.Module):
-    def __init__(self, net):
-        super(VAEConcatCritic, self).__init__()
-        self.p, self.q1, self.q2 = net
-
-    def forward(self, x, y):
-        xy_concat = torch.cat((x, y), dim=1)
-        fp = self.p(xy_concat)
-        fq1 = self.q1(x)
-        fq2 = self.q2(y)
-        fq = fq1.view(-1, 1) + fq2.view(1, -1)
-        return fp, fq
+from critics import VAE, VAEConcatCritic, ConcatCritic, ConvNet
 
 def generate_mask(mask, config):
     batch_size = config.batch_size
     channels = config.channels
-    x_dim, y_dim = config.dims[:2]
+    x_dim = config.dims[0]
     return torch.cat([
         torch.ones(batch_size, channels, x_dim - mask, x_dim),
         torch.zeros(batch_size, channels, mask, x_dim)
@@ -249,7 +119,10 @@ def load_dataset(config):
 
     return train_dataloader, test_dataloader
 
-def test(test_dataloader, net, config, **kwargs):
+def test(test_dataloader, net, config):
+    if config.debug:
+        print("Starting testing ...")
+
     test_losses = []
     with torch.no_grad():
         for j, x in enumerate(test_dataloader):
@@ -267,6 +140,10 @@ def test(test_dataloader, net, config, **kwargs):
 
             mi = -loss.item()
             test_losses.append(mi)
+
+    if config.debug:
+        print("Done.")
+
     return np.array(test_losses)
 
 def init_estimator(config):
@@ -283,7 +160,10 @@ def init_estimator(config):
         net.to(config.device)
     return net
 
-def train(train_dataloader, net, config, **kwargs):
+def train(train_dataloader, net, config):
+    if config.debug:
+        print("Starting training ...")
+
     optimizer = optim.Adam(net.parameters(), lr=1e-4)
     train_losses = []
     for i in range(config.epochs):
@@ -305,6 +185,10 @@ def train(train_dataloader, net, config, **kwargs):
             optimizer.step()
             mi = -loss.item()
             train_losses.append(mi)
+
+    if config.debug:
+        print("Done.")
+
     return np.array(train_losses)
 
 def parse_args():
@@ -327,6 +211,8 @@ def parse_args():
     return args
 
 def init_config():
+    print("Initializing ...")
+
     config = parse_args()
 
     if config.imgs:
@@ -377,6 +263,9 @@ def init_config():
     if config.debug:
         print(config)
 
+    if config.debug:
+        print("Done.")
+
     return config
 
 def plot(losses, config, label):
@@ -390,11 +279,16 @@ def plot(losses, config, label):
     plt.clf()
 
 def save_losses(losses, test_losses, config):
+    if config.debug:
+        print("Saving losses ... ")
     np.save(config.loss_log_path, losses)
     np.save(config.loss_log_path_t, test_losses)
 
     plot(train_losses, config, label='train')
     plot(test_losses, config, label='test')
+
+    if config.debug:
+        print("Done.")
 
 if __name__ == '__main__':
     # initialize
