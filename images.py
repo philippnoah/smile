@@ -31,14 +31,14 @@ def train(train_dataloader, net, config):
             loss = MI(f, config)
             loss.backward()
 
+            optimizer.step()
+            mi = abs(loss.item())
+            train_losses.append(mi)
+
             if j % 20 == 0 and config.debug:
-                print(f'{j}: {-loss.item():.3f}')
+                print(f'{j}: {mi:.3f}')
                 if config.estimator_name == 'vae':
                     print(f[0].mean().item(), f[1].mean().item())
-
-            optimizer.step()
-            mi = -loss.item()
-            train_losses.append(mi)
 
     if config.debug:
         print("Done.")
@@ -270,7 +270,7 @@ def init_estimator(config):
     if config.critic_net_name == 'exp' or config.dataset_name == 'text':
         config.channels = 1
         net = ExpNet(config)
-        # net = ConcatCritic(conv_net)
+        # net = ConcatCritic(net)
         net.to(config.device)
     elif config.critic_net_name == 'vae':
         pnet = VAE(config, repeat=config.repeat * 2)
@@ -285,8 +285,8 @@ def init_estimator(config):
         net.to(config.device)
     return net
 
-def plot(losses, config, label):
-    plt.plot(losses, label=label)
+def plot(losses: np.array, config, label):
+    plt.scatter(list(range(len(losses))), losses, label=label)
     plt.title(config)
     plt.legend()
     plt.xlabel('iterations')
