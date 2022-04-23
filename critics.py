@@ -10,10 +10,11 @@ class ExpNet(nn.Module):
         x_dim, y_dim = config.dims[:2]
         layers = [
             nn.Flatten(),
-            nn.Linear(config.channels * x_dim * y_dim, 1000)
+            nn.Linear(config.channels * x_dim * y_dim, 1000),
+            nn.Dropout()
             ]
         layers += [nn.Linear(1000, 1000), nn.ReLU()] * 3
-        layers += [nn.Linear(1000, 1)]
+        layers += [nn.Linear(1000, 1), nn.LogSoftmax()]
         self.layers = nn.Sequential(*layers)
 
     def forward(self, x):
