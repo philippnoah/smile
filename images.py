@@ -17,7 +17,6 @@ def train(train_dataloader, net, config):
     if config.debug:
         print("Starting training ...")
 
-    loss_fn = nn.NLLLoss()
     optimizer = optim.Adam(net.parameters(), lr=config.learning_rate)
     train_losses = []
 
@@ -26,14 +25,10 @@ def train(train_dataloader, net, config):
             if j > config.iterations:
                 break
             optimizer.zero_grad()
-            # x = torch.chunk(x, config.repeat, dim=0)
-            # x, y = generate_test(x, config)
-            # f = net(x, t).to(config.device)
-            y = net(x).to(config.device)
-            # loss = MI(f, config)
-            # t = torch.nn.functional.one_hot(t, num_classes=10).float()
-            # breakpoint()
-            loss = loss_fn(y, t)
+            x = torch.chunk(x, config.repeat, dim=0)
+            x, y = generate_test(x, config)
+            f = net(x).to(config.device)
+            loss = MI(f, config)
             loss.backward()
 
             if j % 20 == 0 and config.debug:
