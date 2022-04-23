@@ -35,9 +35,9 @@ class VAE(nn.Module):
     def __init__(self, config, repeat=None):
         super(VAE, self).__init__()
         self.config = config
-        x_dim, y_dim, z_dim = config.dims
+        x_dim, y_dim, z_dim = self.x_dim, self.y_dim, self.z_dim = config.dims
         channels = config.channels
-        repeat = repeat or config.repeat
+        repeat = self.repeat = repeat or config.repeat
 
         self.conv1 = nn.Sequential(
             nn.Conv2d(repeat * channels, 64 * repeat, 5, 2, 2),
@@ -49,7 +49,7 @@ class VAE(nn.Module):
             nn.Conv2d(64 * repeat, 128 * repeat, 5, 2, 2),
             nn.ReLU()
         )
-        dim_x, dim_y = utils.next_conv_size(dim_x, dim_y, 5, 2, 2)
+        self.dim_x, self.dim_y = utils.next_conv_size(dim_x, dim_y, 5, 2, 2)
         self.top_conv_x, self.top_conv_y = dim_x, dim_y
         self.fc = nn.Sequential(
             nn.Flatten(),
@@ -57,9 +57,7 @@ class VAE(nn.Module):
             nn.ReLU(),
             nn.Linear(1024 * repeat, z_dim * 2 * repeat)
         )
-        self.enc = nn.Sequential(
-            self.conv1, self.conv2, self.fc
-        )
+        self.enc = nn.Sequential(self.conv1, self.conv2, self.fc)
 
         if self.dim_x == 28:
             self.dec = nn.Sequential(
@@ -83,6 +81,7 @@ class VAE(nn.Module):
             )
 
     def forward(self, x):
+        breakpoint()
         z = self.enc(x)
         z_dims = self.z_dim * self.repeat
         z_m, log_z_s = z[:, :z_dims], z[:, z_dims:]

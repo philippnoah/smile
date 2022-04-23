@@ -234,13 +234,16 @@ def load_dataset(config):
     if config.dataset_name == 'mnist':
         dataset = datasets.MNIST('data/', train=True, download=True, transform=transforms.Compose([transf]))
         config.channels = 1
-        config.dims = (28, 28)
+        config.dims = [28, 28]
     else:
         normal = transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
         dataset = datasets.CIFAR10('data/cifar/', train=True, download=True, \
             transform=transforms.Compose([transf, normal]))
         config.channels = 3
-        config.dims = (32, 32)
+        config.dims = [32, 32]
+
+    if config.estimator_name == 'vae':
+        config.dims += [10] # add z dim
 
     random_indices = np.random.permutation(np.arange(0, int(len(dataset) * config.dataset_ratio)))
 
