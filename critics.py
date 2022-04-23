@@ -1,6 +1,32 @@
+from turtle import forward
 import torch
 import torch.nn as nn
 import utils
+import torch.nn.functional as F
+
+class ExpNet(nn.Module):
+    def __init__(self, config):
+        super(ExpNet, self).__init__()
+        x_dim, y_dim = config.dims[:2]
+        # self.conv1 = nn.Conv2d(1, 10, kernel_size=5)
+        # self.conv2 = nn.Conv2d(10, 20, kernel_size=5)
+        self.conv2_drop = nn.Dropout2d()
+        self.flatten = nn.Flatten()
+        self.fc0 = nn.Linear(x_dim * y_dim, 320)
+        self.fc1 = nn.Linear(320, 50)
+        self.fc2 = nn.Linear(50, 10)
+
+    def forward(self, x):
+        # x = F.relu(F.max_pool2d(self.conv1(x), 2))
+        # x = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
+        # x = x.view(-1, 320)
+        # breakpoint()
+        x = self.flatten(x)
+        x = F.relu(self.fc0(x))
+        x = F.relu(self.fc1(x))
+        x = F.dropout(x, training=self.training)
+        x = self.fc2(x)
+        return F.log_softmax(x)
 
 class ConvNet(nn.Module):
     def __init__(self, config):
@@ -26,6 +52,7 @@ class ConvNet(nn.Module):
         )
 
     def forward(self, x):
+        breakpoint()
         z = self.conv1(x)
         z = self.conv2(z)
         z = self.fc(z)
@@ -81,7 +108,6 @@ class VAE(nn.Module):
             )
 
     def forward(self, x):
-        breakpoint()
         z = self.enc(x)
         z_dims = self.z_dim * self.repeat
         z_m, log_z_s = z[:, :z_dims], z[:, z_dims:]
@@ -114,8 +140,9 @@ class ConcatCritic(nn.Module):
         batch_size = x.size(0)
         x_tiled = torch.stack([x] * batch_size, dim=0)
         y_tiled = torch.stack([y] * batch_size, dim=1)
-        xy_pairs = torch.reshape(torch.cat((x_tiled, y_tiled), dim=2), [
-                                 batch_size * batch_size, x.size(1) * 2] + list(x.shape[2:]))
+        xy_tiled = torch.cat((x_tiled, y_tiled), dim=2)
+        size = [batch_size * batch_size, x.size(1) * 2] + list(x.shape[2:])
+        xy_pairs = torch.reshape(xy_tiled, size)
         scores = self.net(xy_pairs)
         return torch.reshape(scores, [batch_size, batch_size]).t()
 

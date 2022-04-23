@@ -11,23 +11,29 @@ import matplotlib.pyplot as plt
 import utils
 from datetime import datetime as dt
 
-from critics import VAE, VAEConcatCritic, ConcatCritic, ConvNet
+from critics import VAE, VAEConcatCritic, ConcatCritic, ConvNet, ExpNet
 
 def train(train_dataloader, net, config):
     if config.debug:
         print("Starting training ...")
 
-    optimizer = optim.Adam(net.parameters(), lr=1e-4)
+    loss_fn = nn.NLLLoss()
+    optimizer = optim.Adam(net.parameters(), lr=config.learning_rate)
     train_losses = []
+
     for i in range(config.epochs):
-        for j, x in enumerate(train_dataloader):
+        for j, (x, t) in enumerate(train_dataloader):
             if j > config.iterations:
                 break
             optimizer.zero_grad()
-            x = torch.chunk(x[0], config.repeat, dim=0)
-            x, y = generate_test(x, config)
-            f = net(x, y).to(config.device)
-            loss = MI(f, config)
+            # x = torch.chunk(x, config.repeat, dim=0)
+            # x, y = generate_test(x, config)
+            # f = net(x, t).to(config.device)
+            y = net(x).to(config.device)
+            # loss = MI(f, config)
+            # t = torch.nn.functional.one_hot(t, num_classes=10).float()
+            # breakpoint()
+            loss = loss_fn(y, t)
             loss.backward()
 
             if j % 20 == 0 and config.debug:
@@ -71,13 +77,12 @@ def test(test_dataloader, net, config):
 
     return np.array(test_losses)
 
-def generate_mask(mask, config):
-    batch_size = config.batch_size
+def generate_mask(mask, config, batch_size):
     channels = config.channels
-    x_dim = config.dims[0]
+    x_dim, y_dim = config.dims[:2]
     return torch.cat([
-        torch.ones(batch_size, channels, x_dim - mask, x_dim),
-        torch.zeros(batch_size, channels, mask, x_dim)
+        torch.ones(batch_size, channels, x_dim - mask, y_dim),
+        torch.zeros(batch_size, channels, mask, y_dim)
     ], dim=2).to(config.device)
 
 def generate_transform(config):
@@ -116,12 +121,14 @@ def generate_transform(config):
     return f
 
 def generate_test(X, config):
+    batch_size = X[0].shape[0]
+
     x = [X[i].to(config.device) for i in config.imgs[0]]
     y = [X[i].to(config.device) for i in config.imgs[1]]
 
     if config.transform == 'mask':
-        mx = [generate_mask(m, config) for m in config.masks[0]]
-        my = [generate_mask(m, config) for m in config.masks[1]]
+        mx = [generate_mask(m, config, batch_size) for m in config.masks[0]]
+        my = [generate_mask(m, config, batch_size) for m in config.masks[1]]
 
         x = torch.cat(x, dim=1) * torch.cat(mx, dim=1)
         y = torch.cat(y, dim=1) * torch.cat(my, dim=1)
@@ -213,10 +220,11 @@ def init_config():
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--estimator-name', type=str, default='smile')
+    parser.add_argument('--critic-net-name', type=str, default='conv', choices=['conv', 'vae', 'exp'])
     parser.add_argument('--imgs', type=str, default=None)
     parser.add_argument('--masks', type=str, default=None)
     parser.add_argument('--exp', type=str, default='')
-    parser.add_argument('--batch-size', type=int, default=8)
+    parser.add_argument('--batch-size', type=int, default=16)
     parser.add_argument('--test', action='store_true')
     parser.add_argument('--dataset-name', type=str, default='mnist')
     parser.add_argument('--transform', type=str, default='mask')
@@ -224,14 +232,20 @@ def parse_args():
     parser.add_argument('--debug', type=bool, default=True)
     parser.add_argument('--epochs', type=int, default=1)
     parser.add_argument('--alpha', type=float, default=1.0)
-    parser.add_argument('--iterations', type=float, default=20)#float("inf"))
+    parser.add_argument('--learning-rate', type=float, default=1e-4)
+    parser.add_argument('--iterations', type=float, default=1000)#float("inf"))
     parser.add_argument('--fig-dir', type=str, default='figs/')
     args = parser.parse_args()
     return args
 
 def load_dataset(config):
     transf = transforms.ToTensor()
-    if config.dataset_name == 'mnist':
+    if config.dataset_name == 'text':
+        dataset = utils.TextDataset('data/text/token_embeddings_sm.npy')
+        config.channels = dataset.x_train[0].shape[0]
+        config.dims = dataset.x_train[0].shape[1:]
+        dataset.x_train = dataset.x_train[:,:,:config.dims[0],:]
+    elif config.dataset_name == 'mnist':
         dataset = datasets.MNIST('data/', train=True, download=True, transform=transforms.Compose([transf]))
         config.channels = 1
         config.dims = [28, 28]
@@ -258,7 +272,12 @@ def load_dataset(config):
     return train_dataloader, test_dataloader
 
 def init_estimator(config):
-    if config.estimator_name == 'vae':
+    if config.critic_net_name == 'exp' or config.dataset_name == 'text':
+        config.channels = 1
+        net = ExpNet(config)
+        # net = ConcatCritic(conv_net)
+        net.to(config.device)
+    elif config.critic_net_name == 'vae':
         pnet = VAE(config, repeat=config.repeat * 2)
         qnet1 = VAE(config)
         qnet2 = VAE(config)
@@ -284,16 +303,15 @@ def plot(losses, config, label):
 def save_losses(losses, test_losses, config):
     if config.debug:
         print("Saving losses ... ")
+
     np.save(config.loss_log_path, losses)
     np.save(config.loss_log_path_t, test_losses)
-
-    plot(train_losses, config, label='train')
-    plot(test_losses, config, label='test')
 
     if config.debug:
         print("Done.")
 
 if __name__ == '__main__':
+
     # initialize
     config = init_config()
     train_dataloader, test_dataloader = load_dataset(config)
@@ -301,7 +319,12 @@ if __name__ == '__main__':
 
     # train, test
     train_losses = train(train_dataloader, net, config)
+    plot(train_losses, config, label='train')
+
+    exit()
+
     test_losses = test(test_dataloader, net, config)
+    plot(test_losses, config, label='test')
 
     # save results
     save_losses(train_losses, test_losses, config)

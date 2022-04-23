@@ -3,6 +3,24 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+import torch.utils.data as td
+
+
+class TextDataset(td.Dataset):
+
+  def __init__(self,file_name):
+    x = np.load(file_name, allow_pickle=True)
+    x = np.nan_to_num(x)
+    non_zero = np.argmin(x.sum(0).sum(1) != 0)
+    x = x[:,:non_zero,:]
+    self.x_train=torch.tensor(np.expand_dims(x, 1), dtype=torch.float32)
+    self.y_train=torch.tensor(np.expand_dims(x, 1), dtype=torch.float32)
+
+  def __len__(self):
+    return len(self.x_train)
+  
+  def __getitem__(self,idx):
+    return self.x_train[idx], self.x_train[np.random.randint(0, self.x_train.shape[0])]
 
 
 def sample_correlated_gaussian(rho=0.5, dim=20, batch_size=128, cubic=None):
