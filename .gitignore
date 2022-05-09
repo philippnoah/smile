@@ -135,3 +135,4 @@ logs/
 .history/
 *.png 
 *.jpg
+.DS_Store

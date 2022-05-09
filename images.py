@@ -27,7 +27,7 @@ def train(train_dataloader, net, config):
             optimizer.zero_grad()
             x = torch.chunk(x, config.repeat, dim=0)
             x, y = generate_test(x, config)
-            f = net(x).to(config.device)
+            f = net(x, y).to(config.device)
             loss = MI(f, config)
             loss.backward()
 
@@ -196,7 +196,7 @@ def init_config():
         )
 
     if config.debug:
-        config.filename = f"{config.estimator_name}_{dt.now().strftime('%Y-%m-%d-_%H:%M:%S')}"
+        config.filename = f"{dt.now().strftime('%Y-%m-%d-_%H:%M:%S')}_{config.estimator_name}_{str(config.masks)}"
 
     config.loss_log_path = os.path.join(config.log_dir, config.filename)
     config.loss_log_path_t = os.path.join(config.log_dir_t, config.filename)
@@ -219,32 +219,39 @@ def parse_args():
     parser.add_argument('--imgs', type=str, default=None)
     parser.add_argument('--masks', type=str, default=None)
     parser.add_argument('--exp', type=str, default='')
-    parser.add_argument('--batch-size', type=int, default=16)
+    parser.add_argument('--batch-size', type=int, default=32)
     parser.add_argument('--test', action='store_true')
-    parser.add_argument('--dataset-name', type=str, default='mnist')
+    parser.add_argument('--dataset-name', type=str, default='mnist', choices=['mnist', 'cifar', 'text', 'bert'])
     parser.add_argument('--transform', type=str, default='mask')
     parser.add_argument('--dataset-ratio', type=float, default=1.0)
     parser.add_argument('--debug', type=bool, default=True)
     parser.add_argument('--epochs', type=int, default=1)
     parser.add_argument('--alpha', type=float, default=1.0)
     parser.add_argument('--learning-rate', type=float, default=1e-4)
-    parser.add_argument('--iterations', type=float, default=1000)#float("inf"))
+    parser.add_argument('--iterations', type=float, default=100)#float("inf"))
     parser.add_argument('--fig-dir', type=str, default='figs/')
+    parser.add_argument('--num-rows', type=int, default=None)
     args = parser.parse_args()
     return args
 
 def load_dataset(config):
     transf = transforms.ToTensor()
+    if config.dataset_name == 'bert':
+        file_name = 'data/text/bert_embeddings_10.pt'
+        dataset = utils.TextDataset(file_name, num_rows=config.num_rows, model_name=config.dataset_name)
+        config.channels = dataset.x_train.shape[1]
+        config.dims = dataset.x_train.shape[2:]
     if config.dataset_name == 'text':
-        dataset = utils.TextDataset('data/text/token_embeddings_sm.npy')
-        config.channels = dataset.x_train[0].shape[0]
-        config.dims = dataset.x_train[0].shape[1:]
+        file_name = 'data/text/length_10.npy'
+        dataset = utils.TextDataset(file_name, num_rows=config.num_rows, model_name=config.dataset_name)
+        config.channels = dataset.x_train.shape[1]
+        config.dims = dataset.x_train.shape[2:]
         dataset.x_train = dataset.x_train[:,:,:config.dims[0],:]
     elif config.dataset_name == 'mnist':
         dataset = datasets.MNIST('data/', train=True, download=True, transform=transforms.Compose([transf]))
         config.channels = 1
         config.dims = [28, 28]
-    else:
+    elif config.dataset_name == 'cifar':
         normal = transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
         dataset = datasets.CIFAR10('data/cifar/', train=True, download=True, \
             transform=transforms.Compose([transf, normal]))
@@ -259,18 +266,18 @@ def load_dataset(config):
     dataset = td.Subset(dataset, random_indices)
 
     train_dataloader = td.DataLoader(dataset, batch_size=config.batch_size * config.repeat, \
-        shuffle=True, num_workers=2, pin_memory=True)
+        shuffle=False, num_workers=2, pin_memory=True)
         
     test_dataloader = td.DataLoader(dataset, batch_size=config.batch_size * config.repeat, \
-        shuffle=True, num_workers=2, pin_memory=True)
+        shuffle=False, num_workers=2, pin_memory=True)
 
     return train_dataloader, test_dataloader
 
 def init_estimator(config):
-    if config.critic_net_name == 'exp' or config.dataset_name == 'text':
+    if config.critic_net_name == 'exp' or config.dataset_name == 'text' or config.dataset_name == 'bert':
         config.channels = 1
         net = ExpNet(config)
-        # net = ConcatCritic(net)
+        net = ConcatCritic(net)
         net.to(config.device)
     elif config.critic_net_name == 'vae':
         pnet = VAE(config, repeat=config.repeat * 2)
@@ -286,8 +293,15 @@ def init_estimator(config):
     return net
 
 def plot(losses: np.array, config, label):
+    def moving_average(a, n) :
+        ret = np.cumsum(a, dtype=float)
+        ret[n:] = ret[n:] - ret[:-n]
+        return ret[n - 1:] / n
+
     plt.scatter(list(range(len(losses))), losses, label=label)
-    plt.title(config)
+    line = moving_average(losses, 20)
+    plt.plot(line, color='red')
+    plt.title(config.masks)
     plt.legend()
     plt.xlabel('iterations')
     plt.ylabel('MI')
