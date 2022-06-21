@@ -1,4 +1,5 @@
 import numpy as np
+from numpy.random import randint
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -7,6 +8,50 @@ import torch.utils.data as td
 import pandas as pd
 import nltk
 from gensim.models import KeyedVectors
+
+class TranslationDataset(td.Dataset):
+    def __init__(self, token_limit=None, seq=True, random=False, translation=False, keep=None) -> None:
+        self.random = random
+        self.translation = translation
+        self.token_limit = token_limit
+        self.j = -1
+        self.keep = keep
+        self.load(0)
+    
+    def __len__(self):
+        return len(self.EN)
+    
+    def __getitem__(self, index: int):
+        # l = self.FR.size(1) #int(self.FR.size(1) * self.keep)
+        if self.random:
+            random_index = randint(0, len(self.FR))
+            return (self.EN[index], self.FR[random_index])
+        return (self.EN[index], self.FR[index])
+
+    def load(self, j=0):
+        if j != self.j:
+            try:
+                en_name = f"full/en_{j*2000}-{j*2000+2000}.pt"
+                fr_name = f"full/fr_{j*2000}-{j*2000+2000}.pt"
+                print(f"Now loading .... {en_name}")
+                EN = FR = torch.load(en_name, map_location=torch.device('cpu'))
+                if self.translation:
+                    print(f"Now loading .... {fr_name}")
+                    FR = torch.load(fr_name, map_location=torch.device('cpu'))
+                t = min(self.token_limit or EN.size(1), EN.size(1), FR.size(1))
+                m = min(FR.size(0), EN.size(0))
+                self.FR = FR[:m,:t,:].unsqueeze(1)
+                self.EN = EN[:m,:t,:].unsqueeze(1)
+                self.j = j
+
+            except Exception as e:
+                print(e)
+                return False
+        else:
+            print("Already loaded:", j)
+        return True
+        
+
 
 class TextDataset(td.Dataset):
     def __init__(self, file_name, num_rows=None, model_name='text'):
@@ -31,7 +76,7 @@ class TextDataset(td.Dataset):
         return self.x_train[idx], self.x_train[np.random.randint(0, self.x_train.shape[0])]
 
 def sample_correlated_gaussian(rho=0.5, dim=20, batch_size=128, cubic=None):
-    """Generate samples from a correlated Gaussian distribution."""
+    '''Generate samples from a correlated Gaussian distribution.'''
     x, eps = torch.chunk(torch.randn(batch_size, 2 * dim), 2, dim=1)
     y = rho * x + torch.sqrt(torch.tensor(1. - rho**2).float()) * eps
 
@@ -93,7 +138,7 @@ def mi_to_rho(dim, mi):
 
 
 def mi_schedule(n_iter):
-    """Generate schedule for increasing correlation over time."""
+    '''Generate schedule for increasing correlation over time.'''
     mis = np.round(np.linspace(0.5, 5.5-1e-9, n_iter)) * 2.0
     return mis.astype(np.float32)
 
@@ -113,7 +158,7 @@ def logmeanexp_nodiag(x, dim=None, device='cpu'):
         dim = (0, 1)
 
     logsumexp = torch.logsumexp(
-        x - torch.diag(np.inf * torch.ones(batch_size)), dim=dim)
+        x - torch.diag(np.inf * torch.ones(batch_size)).to(device), dim=dim)
 
     try:
         if len(dim) == 1:
@@ -154,7 +199,7 @@ def infonce_lower_bound(scores):
 
 
 def js_fgan_lower_bound(f):
-    """Lower bound on Jensen-Shannon divergence from Nowozin et al. (2016)."""
+    '''Lower bound on Jensen-Shannon divergence from Nowozin et al. (2016).'''
     f_diag = f.diag()
     first_term = -F.softplus(-f_diag).mean()
     n = f.size(0)
@@ -174,21 +219,21 @@ def js_lower_bound(f):
 
 
 def dv_upper_lower_bound(f):
-    """DV lower bound, but upper bounded by using log outside."""
+    '''DV lower bound, but upper bounded by using log outside.'''
     first_term = f.diag().mean()
     second_term = logmeanexp_nodiag(f)
 
     return first_term - second_term
 
 
-def mine_lower_bound(f, buffer=None, momentum=0.9):
+def mine_lower_bound(f, buffer=None, momentum=0.9, device='cpu'):
     if buffer is None:
-        buffer = torch.tensor(1.0)
+        buffer = torch.tensor(1.0).to(device)
     first_term = f.diag().mean()
 
-    buffer_update = logmeanexp_nodiag(f).exp()
+    buffer_update = logmeanexp_nodiag(f, device=device).exp()
     with torch.no_grad():
-        second_term = logmeanexp_nodiag(f)
+        second_term = logmeanexp_nodiag(f, device=device)
         buffer_new = buffer * momentum + buffer_update * (1 - momentum)
         buffer_new = torch.clamp(buffer_new, min=1e-4)
         third_term_no_grad = buffer_update / buffer_new
@@ -210,10 +255,10 @@ def regularized_dv_bound(f, l=0.0):
     return first_term - second_term + reg_term - reg_term_no_grad
 
 
-def renorm_q(f, alpha=1.0, clip=None):
+def renorm_q(f, alpha=1.0, clip=None, device='cpu'):
     if clip is not None:
         f = torch.clamp(f * alpha, -clip, clip)
-    z = logmeanexp_nodiag(f * alpha, dim=(0, 1))
+    z = logmeanexp_nodiag(f * alpha, dim=(0, 1), device=device)
     return z
 
 
@@ -227,8 +272,7 @@ def disc_renorm_q(f):
 
         first_term = -F.softplus(z - f).diag().mean()
         st = -F.softplus(f - z)
-        second_term = (st - st.diag().diag()).sum() / \
-            (batch_size * (batch_size - 1.))
+        second_term = (st - st.diag().diag()).sum() /             (batch_size * (batch_size - 1.))
         total = first_term + second_term
 
         total.backward(retain_graph=True)
@@ -245,8 +289,8 @@ def renorm_p(f, alpha=1.0):
     return z
 
 
-def smile_lower_bound(f, alpha=1.0, clip=None):
-    z = renorm_q(f, alpha, clip)
+def smile_lower_bound(f, alpha=1.0, clip=None, device='cpu'):
+    z = renorm_q(f, alpha, clip, device=device)
     dv = f.diag().mean() - z
 
     js = js_fgan_lower_bound(f)
@@ -307,7 +351,7 @@ def estimate_p_norm(f, alpha=1.0):
 
 def estimate_mutual_information(estimator, x, y, critic_fn,
                                 baseline_fn=None, alpha_logit=None, device='cpu', **kwargs):
-    """Estimate variational lower bounds on mutual information.
+    '''Estimate variational lower bounds on mutual information.
 
   Args:
     estimator: string specifying estimator, one of:
@@ -322,7 +366,7 @@ def estimate_mutual_information(estimator, x, y, critic_fn,
 
   Returns:
     scalar estimate of mutual information
-    """
+    '''
     x, y = x.to(device), y.to(device)
     scores = critic_fn(x, y)
     if baseline_fn is not None:
@@ -416,7 +460,7 @@ BASELINES = {
 
 
 def train_estimator(critic_params, data_params, mi_params, opt_params, **kwargs):
-    """Main training loop that estimates time-varying MI."""
+    '''Main training loop that estimates time-varying MI.'''
     # Ground truth rho is only used by conditional critic
     critic = CRITICS[mi_params.get('critic', 'separable')](
         rho=None, **critic_params).to(device)

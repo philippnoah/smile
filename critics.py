@@ -8,19 +8,23 @@ class ExpNet(nn.Module):
     def __init__(self, config):
         super(ExpNet, self).__init__()
         x_dim, y_dim = config.dims[:2]
+        self.config = config
         # self.conv1 = nn.Conv2d(2 * config.repeat * config.channels, 64, kernel_size=5, stride=2, padding=2)
         # self.conv2 = nn.Conv2d(64, 128, kernel_size=5, stride=2, padding=2)
         # self.conv2_drop = nn.Dropout2d()
         self.flatten = nn.Flatten()
-        self.fc0 = nn.Linear(2 * x_dim * y_dim, 1024)
-        self.layers = nn.Sequential(*[nn.Linear(1024, 1024), nn.ReLU()]*4)
-        self.fc2 = nn.Linear(1024, 1)
+        h = config.hidden_dim
+        self.fc0 = nn.Linear(768, h)
+        self.layers = nn.Sequential(*[nn.Linear(h, h), nn.ReLU()])
+        self.fc2 = nn.Linear(h, 1)
 
     def forward(self, x):
+        # breakpoint()
         # x = F.relu(self.conv1(x), 2)
         # x = F.relu(self.conv2_drop(self.conv2(x)), 2)
         # x = x.view(-1, 320)
-        x = self.flatten(x)
+
+        # x1 = self.flatten(x)
         x = self.fc0(x)
         x = self.layers(x)
         # x = F.dropout(x, training=self.training)
@@ -140,6 +144,7 @@ class ConcatCritic(nn.Module):
         x_tiled = torch.stack([x] * batch_size, dim=0)
         y_tiled = torch.stack([y] * batch_size, dim=1)
         xy_tiled = torch.cat((x_tiled, y_tiled), dim=2)
+        breakpoint()
         size = [batch_size * batch_size, x.size(1) * 2] + list(x.shape[2:])
         xy_pairs = torch.reshape(xy_tiled, size)
         scores = self.net(xy_pairs)
@@ -157,3 +162,54 @@ class VAEConcatCritic(nn.Module):
         fq2 = self.q2(y)
         fq = fq1.view(-1, 1) + fq2.view(1, -1)
         return fp, fq
+
+def mlp(dim, hidden_dim, output_dim, layers,):
+    """Create a mlp from the configurations."""
+
+    seq = [
+      nn.Linear(dim, hidden_dim),
+      # nn.Dropout(.1),
+      nn.ReLU(),
+      *([nn.Linear(hidden_dim, hidden_dim), nn.Dropout(.15), nn.ReLU(), ] * layers),
+      nn.Linear(hidden_dim, output_dim),
+      # nn.Dropout(.1),
+      # nn.ReLU(),
+      nn.Flatten(-2,-1),
+      nn.Flatten(1,2),
+      # nn.Linear(512, 2048),
+      # nn.Dropout(0.25),
+      # nn.ReLU()
+      ]
+
+    return nn.Sequential(*seq)
+
+class SeparableCritic(nn.Module):
+    """Separable critic. where the output value is g(x) h(y). """
+
+    def __init__(self, config):
+        super(SeparableCritic, self).__init__()
+        # dim, hidden_dim, embed_dim, layers, activation, **extra_kwargs
+        x_dim, y_dim = config.dims[:2]
+        self.config = config
+        self._g = mlp(dim=y_dim, hidden_dim=config.hidden_dim, output_dim=config.embed_dim, layers=config.num_layers)
+        self._h = mlp(dim=y_dim, hidden_dim=config.hidden_dim, output_dim=config.embed_dim, layers=config.num_layers)
+        # self.final = nn.Sequential(nn.Linear(self.batch_size, self.hidden_dim), nn.ReLU(), nn.Linear(self.hidden_dim, self.batch_size), nn.ReLU())
+        # self.final = nn.Sequential(
+        #   # nn.Dropout(),
+        #   nn.Linear(config.batch_size, config.hidden_dim, ),
+        #   nn.ReLU(),
+        #   nn.Linear(config.hidden_dim, config.batch_size, ),
+        #   nn.ReLU(),
+        #   )
+
+
+    def forward(self, x, y):
+        h = self._h(y)
+        # breakpoint()
+        # h = h.squeeze(1).squeeze(2)
+        g = self._g(x)
+        # g = g.squeeze(1).squeeze(2)
+        scores = torch.matmul(h, g.t())
+        # if scores.size(1) == self.config.batch_size:
+        #     scores = self.final(scores)
+        return -scores
